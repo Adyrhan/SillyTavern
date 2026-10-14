@@ -969,6 +969,33 @@ body .panelControlBar {
     order: 1;
 }
 
+#mes_ooc {
+    order: 1;
+}
+
+#mes_ooc.ooc_armed {
+    color: var(--SmartThemeQuoteColor);
+    opacity: 1;
+}
+
+#send_textarea.ooc_armed {
+    outline: 1px dashed var(--SmartThemeQuoteColor);
+}
+
+#chat .mes[ooc="true"] .mes_text {
+    opacity: 0.8;
+}
+
+#chat .mes[ooc="true"] .ch_name .name_text::after {
+    content: "OOC";
+    margin-left: 0.5em;
+    padding: 0 0.4em;
+    border: 1px solid currentColor;
+    border-radius: 5px;
+    font-size: calc(var(--mainFontSize) * 0.7);
+    opacity: 0.7;
+}
+
 #send_form .mes_stop {
     display: none;
     order: 2;
@@ -4578,6 +4605,7 @@ body:is([data-generating="true"], [data-swiping="true"]) :is(
     #send_but,
     #mes_continue,
     #mes_impersonate,
+    #mes_ooc,
     #chat .last_mes .mes_buttons,
     #chat .last_mes .mes_reasoning_actions) {
     display: none;

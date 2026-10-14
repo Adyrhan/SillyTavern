@@ -273,6 +273,7 @@ import { extractReasoningFromData, extractReasoningSignatureFromData, initReason
 import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
+import { getOocMode, initOocMode, isOocExcludedFromContext, OOC_MODE, runOocGeneration } from './scripts/ooc.js';
 import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
@@ -775,6 +776,7 @@ async function firstLoadInit() {
     initSettingsSearch();
     initBulkEdit();
     initReasoning();
+    initOocMode();
     initWelcomeScreen();
     await initScrapers();
     initCustomSelectedSamplers();
@@ -2655,6 +2657,7 @@ export function updateMessageElement(mes, { messageId = chat.length - 1, message
         'timestamp': timestamp,
         // ...(type ?? { type }),
         'type': mes.extra?.type ?? '',
+        'ooc': mes.extra?.ooc ? 'true' : null,
     });
 
     messageElement.find('.avatar img').attr('src', avatarImg);
@@ -3583,6 +3586,8 @@ class StreamingProcessor {
         this.images = [];
         /** @type {string?} */
         this.reasoningSignature = null;
+        /** Extra properties of the streamed message */
+        this.extra = {};
     }
 
     /**
@@ -3630,7 +3635,7 @@ class StreamingProcessor {
             this.sendTextarea.value = '';
             this.sendTextarea.dispatchEvent(new Event('input', { bubbles: true }));
         } else {
-            await saveReply({ type: this.type, getMessage: text, fromStreaming: true });
+            await saveReply({ type: this.type, getMessage: text, fromStreaming: true, extra: this.extra });
             messageId = chat.length - 1;
             await this.#checkDomElements(messageId, continueOnReasoning);
             this.markUIGenStarted();
@@ -3992,6 +3997,106 @@ export function createRawPrompt(prompt, api, instructOverride, quietToLoud, syst
  */
 
 /**
+ * Builds the API request data for a raw prompt, the same way as a quiet generation.
+ * A customized response length is restored as soon as it has been read, except for Chat Completion.
+ * @param {string|object[]} prompt Prompt ready for use in generation (see createRawPrompt)
+ * @param {string} api API to use
+ * @returns {Promise<object|any[]>} Generation data
+ */
+async function createRawGenerationData(prompt, api) {
+    switch (api) {
+        case 'kobold':
+        case 'koboldhorde': {
+            let generateData;
+            if (kai_settings.preset_settings === 'gui') {
+                generateData = { prompt: prompt, gui_settings: true, max_length: amount_gen, max_context_length: max_context, api_server: kai_settings.api_server };
+            } else {
+                const isHorde = api === 'koboldhorde';
+                const koboldSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
+                generateData = getKoboldGenerationData(prompt.toString(), koboldSettings, amount_gen, max_context, isHorde, 'quiet');
+            }
+            TempResponseLength.restore(api);
+            return generateData;
+        }
+        case 'novel': {
+            const novelSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
+            const generateData = getNovelGenerationData(prompt, novelSettings, amount_gen, false, false, null, 'quiet');
+            TempResponseLength.restore(api);
+            return generateData;
+        }
+        case 'textgenerationwebui': {
+            const generateData = await getTextGenGenerationData(prompt, amount_gen, false, false, null, 'quiet');
+            TempResponseLength.restore(api);
+            return generateData;
+        }
+        case 'openai':
+            return prompt;  // generateData is just the chat message object
+        default:
+            return {};
+    }
+}
+
+/**
+ * Streams the reply to a raw prompt into a new chat message (or swipe), reusing the regular streaming UI.
+ * The request is built like a quiet generation (no assistant prefill, tool calls or multiple swipes).
+ * @param {object} params
+ * @param {string} params.type Generation type of the chat message ('normal' or 'swipe')
+ * @param {string|object[]} params.prompt Prompt or chat-style messages
+ * @param {string} [params.systemPrompt] System prompt
+ * @param {number|null} [params.responseLength] Response length override
+ * @param {object} [params.extra] Extra properties of the streamed message
+ * @returns {Promise<number|null>} Index of the streamed message, or null if streaming failed
+ */
+export async function streamRawReply({ type, prompt, systemPrompt = '', responseLength = null, extra = {} }) {
+    const api = main_api;
+    const responseLengthCustomized = typeof responseLength === 'number' && responseLength > 0;
+
+    try {
+        if (responseLengthCustomized) {
+            TempResponseLength.save(api, responseLength);
+        }
+
+        let finalPrompt = createRawPrompt(prompt, api, false, false, systemPrompt, '');
+
+        // Allow extensions to modify the prompt before generation, as in generateRawData
+        if (typeof finalPrompt === 'string') {
+            const eventData = { prompt: finalPrompt, dryRun: false };
+            await eventSource.emit(event_types.GENERATE_AFTER_COMBINE_PROMPTS, eventData);
+            finalPrompt = eventData.prompt;
+        } else {
+            const eventData = { chat: finalPrompt, dryRun: false };
+            await eventSource.emit(event_types.CHAT_COMPLETION_PROMPT_READY, eventData);
+            finalPrompt = eventData.chat;
+        }
+
+        const rawData = await createRawGenerationData(finalPrompt, api);
+        const generateData = api === 'openai' ? { prompt: rawData } : rawData;
+        if (api === 'kobold') {
+            generateData.streaming = true;
+        }
+
+        streamingProcessor = new StreamingProcessor(type, false, generation_started, '', new PromptReasoning());
+        streamingProcessor.extra = extra;
+        streamingProcessor.generator = await sendStreamingRequest('quiet', generateData, { forceStream: true });
+        TempResponseLength.restore(api);
+
+        const text = await streamingProcessor.generate();
+        if (streamingProcessor.isStopped || !streamingProcessor.isFinished) {
+            return null;
+        }
+
+        const messageId = streamingProcessor.messageId;
+        await streamingProcessor.onFinishStreaming(messageId, text);
+        return messageId;
+    } finally {
+        streamingProcessor = null;
+        if (TempResponseLength.isCustomized()) {
+            TempResponseLength.restore(api);
+        }
+    }
+}
+
+/**
  * Generates a raw data object using the provided prompt.
  * This used to be part of `generateRaw`, but separating it out allows extensions to access other data such as reasoning message.
  * @param {GenerateRawParams} params Parameters for generating a message
@@ -4041,32 +4146,9 @@ export async function generateRawData({ prompt = '', api = null, instructOverrid
         // Check if the generation was aborted during the event
         eventAbortController.signal.throwIfAborted();
 
-        switch (api) {
-            case 'kobold':
-            case 'koboldhorde':
-                if (kai_settings.preset_settings === 'gui') {
-                    generateData = { prompt: prompt, gui_settings: true, max_length: amount_gen, max_context_length: max_context, api_server: kai_settings.api_server };
-                } else {
-                    const isHorde = api === 'koboldhorde';
-                    const koboldSettings = koboldai_settings[koboldai_setting_names[kai_settings.preset_settings]];
-                    generateData = getKoboldGenerationData(prompt.toString(), koboldSettings, amount_gen, max_context, isHorde, 'quiet');
-                }
-                TempResponseLength.restore(api);
-                break;
-            case 'novel': {
-                const novelSettings = novelai_settings[novelai_setting_names[nai_settings.preset_settings_novel]];
-                generateData = getNovelGenerationData(prompt, novelSettings, amount_gen, false, false, null, 'quiet');
-                TempResponseLength.restore(api);
-                break;
-            }
-            case 'textgenerationwebui':
-                generateData = await getTextGenGenerationData(prompt, amount_gen, false, false, null, 'quiet');
-                TempResponseLength.restore(api);
-                break;
-            case 'openai': {
-                generateData = prompt;  // generateData is just the chat message object
-                eventHook = TempResponseLength.setupEventHook(api);
-            } break;
+        generateData = await createRawGenerationData(prompt, api);
+        if (api === 'openai') {
+            eventHook = TempResponseLength.setupEventHook(api);
         }
 
         let data = {};
@@ -4241,6 +4323,16 @@ class TempResponseLength {
 }
 
 /**
+ * Removes the last message from the chat with an animation, so that it can be generated again.
+ */
+export async function deleteLastReplyForRegenerate() {
+    deleteItemizedPromptForMessage(chat.length - 1);
+    chat.length = chat.length - 1;
+    await removeLastMessage();
+    await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
+}
+
+/**
  * Removes last message from the chat DOM.
  * @returns {Promise<void>} Resolves when the message is removed.
  */
@@ -4347,6 +4439,27 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         chat_metadata.tainted = true;
     }
 
+    // Out-of-character replies bypass the roleplay prompt pipeline entirely
+    if (!dryRun && !depth && online_status !== 'no_connection') {
+        const oocTextareaText = String($('#send_textarea').val());
+        const oocMode = getOocMode(type, oocTextareaText);
+
+        if (oocMode === OOC_MODE.BLOCK) {
+            unblockGeneration(type);
+            return Promise.resolve();
+        }
+
+        if (oocMode === OOC_MODE.RUN) {
+            is_send_press = true;
+            deactivateSendButtons();
+            try {
+                return await runOocGeneration(type, oocTextareaText);
+            } finally {
+                unblockGeneration(type);
+            }
+        }
+    }
+
     if (selected_group && !is_group_generating) {
         if (!dryRun) {
             // Returns the promise that generateGroupWrapper returns; resolves when generation is done
@@ -4405,10 +4518,7 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
         if (chat.length && lastMessage.is_user) {
             //do nothing? why does this check exist?
         } else if (type !== 'quiet' && type !== 'swipe' && !isImpersonate && !dryRun && !depth && chat.length) {
-            deleteItemizedPromptForMessage(chat.length - 1);
-            chat.length = chat.length - 1;
-            await removeLastMessage();
-            await eventSource.emit(event_types.MESSAGE_DELETED, chat.length);
+            await deleteLastReplyForRegenerate();
         }
     }
 
@@ -4493,7 +4603,8 @@ export async function Generate(type, { automatic_trigger, force_name2, quiet_pro
     // Collect messages with usable content
     const canUseTools = ToolManager.isToolCallingSupported();
     const canPerformToolCalls = !dryRun && ToolManager.canPerformToolCalls(type) && depth < ToolManager.RECURSE_LIMIT;
-    let coreChat = chat.filter(x => !x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations)));
+    const excludeOoc = isOocExcludedFromContext();
+    let coreChat = chat.filter(x => (!x.is_system || (canUseTools && Array.isArray(x.extra?.tool_invocations))) && !(excludeOoc && x.extra?.ooc));
     if (type === 'swipe') {
         coreChat.pop();
     }
@@ -5869,9 +5980,10 @@ export function removeMacros(str) {
  * @param {boolean} [compact] Send as a compact display message.
  * @param {string} [name] Name of the user sending the message. Defaults to name1.
  * @param {string} [avatar] Avatar of the user sending the message. Defaults to user_avatar.
+ * @param {object} [extra] Additional message extra properties.
  * @returns {Promise<any>} A promise that resolves to the message when it is inserted.
  */
-export async function sendMessageAsUser(messageText, messageBias, insertAt = null, compact = false, name = name1, avatar = user_avatar) {
+export async function sendMessageAsUser(messageText, messageBias, insertAt = null, compact = false, name = name1, avatar = user_avatar, extra = {}) {
     messageText = getRegexedString(messageText, regex_placement.USER_INPUT);
 
     const message = {
@@ -5882,6 +5994,7 @@ export async function sendMessageAsUser(messageText, messageBias, insertAt = nul
         mes: substituteParams(messageText),
         extra: {
             isSmallSys: compact,
+            ...extra,
         },
     };
 
@@ -6103,6 +6216,7 @@ function setInContextMessages(msgInContextCount, type) {
 /**
  * @typedef {object} AdditionalRequestOptions
  * @property {JsonSchema} [jsonSchema]
+ * @property {boolean} [forceStream] Stream a quiet Chat Completion request if streaming is enabled
  */
 
 /**
@@ -6634,12 +6748,13 @@ async function processImageAttachment(message, { imageUrls }) {
  * @property {string} [reasoning] Message reasoning
  * @property {string[]} [imageUrls] Links to images
  * @property {string?} [reasoningSignature] Encrypted signature of the reasoning text
+ * @property {object} [extra] Additional message extra properties
  *
  * @typedef {object} SaveReplyResult
  * @property {string} type Type of generation
  * @property {string} getMessage Generated message
  */
-export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null }) {
+export async function saveReply({ type, getMessage, fromStreaming = false, title = '', swipes = [], reasoning = '', imageUrls = [], reasoningSignature = null, extra = {} }) {
     // Backward compatibility
     if (arguments.length > 1 && typeof arguments[0] !== 'object') {
         console.trace('saveReply called with positional arguments. Please use an object instead.');
@@ -6682,6 +6797,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
             lastMessage.extra.reasoning = reasoning;
             lastMessage.extra.reasoning_duration = null;
             lastMessage.extra.reasoning_signature = reasoningSignature;
+            Object.assign(lastMessage.extra, extra);
             await processImageAttachment(lastMessage, { imageUrls });
             if (power_user.message_token_count_enabled) {
                 const tokenCountText = (reasoning || '') + lastMessage.mes;
@@ -6742,7 +6858,7 @@ export async function saveReply({ type, getMessage, fromStreaming = false, title
         console.debug('entering chat update routine for non-swipe post');
         const newMessage = {};
         chat.push(newMessage);
-        newMessage.extra = {};
+        newMessage.extra = { ...extra };
         newMessage.name = name2;
         newMessage.is_user = false;
         newMessage.send_date = getMessageTimeStamp();
