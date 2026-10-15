@@ -4043,11 +4043,12 @@ async function createRawGenerationData(prompt, api) {
  * @param {string} params.type Generation type of the chat message ('normal' or 'swipe')
  * @param {string|object[]} params.prompt Prompt or chat-style messages
  * @param {string} [params.systemPrompt] System prompt
+ * @param {string} [params.prefill] Prefill for the reply (see createRawPrompt)
  * @param {number|null} [params.responseLength] Response length override
  * @param {object} [params.extra] Extra properties of the streamed message
  * @returns {Promise<number|null>} Index of the streamed message, or null if streaming failed
  */
-export async function streamRawReply({ type, prompt, systemPrompt = '', responseLength = null, extra = {} }) {
+export async function streamRawReply({ type, prompt, systemPrompt = '', prefill = '', responseLength = null, extra = {} }) {
     const api = main_api;
     const responseLengthCustomized = typeof responseLength === 'number' && responseLength > 0;
 
@@ -4056,7 +4057,7 @@ export async function streamRawReply({ type, prompt, systemPrompt = '', response
             TempResponseLength.save(api, responseLength);
         }
 
-        let finalPrompt = createRawPrompt(prompt, api, false, false, systemPrompt, '');
+        let finalPrompt = createRawPrompt(prompt, api, false, false, systemPrompt, prefill);
 
         // Allow extensions to modify the prompt before generation, as in generateRawData
         if (typeof finalPrompt === 'string') {

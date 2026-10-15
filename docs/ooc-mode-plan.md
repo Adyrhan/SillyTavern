@@ -136,7 +136,7 @@ Scenario: …
 ### 3.3 Transcript and token budget
 
 - **Included messages:** everything that is not `is_system` (hidden and system messages are left out) and has no `extra[IGNORE_SYMBOL]`. Tool invocations are excluded.
-- **Previous OOC exchanges:** included with the `[OOC]` label, so the user can ask follow-up questions ("what we discussed earlier…").
+- **Previous OOC exchanges:** included with the `[OOC]` label, so the user can ask follow-up questions ("what we discussed earlier…"). Their `(OOC: …)` wrappers are stripped: when the transcript showed them, the model imitated the format, started its reply with `(OOC: ` and opened `<think>` inside it, where the streaming auto-parse (which only matches at the very start) cannot see it.
 - **Format:** `> ${name}: ${mes}`. In multi-line messages, every line gets `> `. Images and attachments are not included in v1.
 - **Budget:**
   1. `budget = getMaxPromptTokens(responseLength)` (`script.js:5981`).
@@ -161,6 +161,7 @@ const reply = await generateRaw({
 });
 ```
 
+- **Answer cue:** in Text Completion without an instruct template there are no turn markers, so the model just continues the text (e.g. writing its planning as the reply). In that case the request uses `prefill: 'Answer:'`, which `createRawPrompt` appends as the last line.
 - **Macros:** `createRawPrompt` runs `substituteParams` over all content. To keep chat text from being reinterpreted, the transcript and the question are escaped first. There is no macro-escaping helper: `removeMacros` (`script.js:5860`) deletes them, which is not what we want. Add `escapeMacros(str)` in `ooc.js`, replacing `{{` with `{​{`. The headings deliberately use `{{char}}` and `{{user}}`.
 - **Errors and abort:** if `generateRaw` throws or is aborted, show a toast (except on abort) and save nothing. The user message already sent stays.
 - **Streaming:** when streaming is enabled for the current API (`isStreamingEnabled()`), `streamRawReply` (in `script.js`) is used instead of `generateRaw`. It builds the request exactly like a quiet raw generation (shared `createRawGenerationData`, same prompt events), so Chat Completion adds no assistant prefill, tool calls or multiple swipes. It forces streaming with a new `forceStream` request option (`createGenerationParameters`/`sendOpenAIRequest`), and streams into the chat with the regular `StreamingProcessor`, which now accepts the new message's `extra` (so `extra.ooc` is set from the first token). After the stream finishes (or is stopped), `finalizeStreamedReply` applies the same post-processing as the non-streaming path: reasoning split, incomplete-sentence trim and `(OOC: …)` wrapping.

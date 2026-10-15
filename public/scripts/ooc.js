@@ -8,6 +8,7 @@ import {
     getCharacterCardFields,
     getMaxPromptTokens,
     isStreamingEnabled,
+    main_api,
     saveChatConditional,
     saveReply,
     saveSettingsDebounced,
@@ -108,6 +109,9 @@ export const OOC_MODE = {
     /** Do not generate anything */
     BLOCK: 'block',
 };
+
+/** Marks the start of the reply in Text Completion without an instruct template, which has no turn markers */
+const PLAIN_TEXT_ANSWER_CUE = 'Answer:';
 
 /** Share of the prompt budget kept free for instruct/chat formatting overhead */
 const BUDGET_SAFETY_MARGIN = 0.05;
@@ -366,8 +370,12 @@ export function stripOocMarkers(text) {
  * @returns {string}
  */
 function formatTranscriptEntry(message) {
-    const label = message.extra?.ooc ? '[OOC] ' : '';
-    const text = `${label}${message.name}: ${message.mes}`;
+    // OOC messages are marked by the label only: showing their (OOC: ...) wrappers
+    // makes the model imitate them and open its reasoning block inside the wrapper
+    const isOoc = message.extra?.ooc === true || isOocUserMessage(message);
+    const label = isOoc ? '[OOC] ' : '';
+    const content = isOoc ? stripOocMarkers(message.mes) : message.mes;
+    const text = `${label}${message.name}: ${content}`;
     return text.split('\n').map(line => `> ${escapeMacros(line)}`).join('\n');
 }
 
@@ -534,13 +542,14 @@ export async function runOocGeneration(type, textareaText) {
     try {
         const { systemPrompt, document, responseLength } = await buildOocRequest(questionIndex);
         const prompt = [{ role: 'user', content: document }];
+        const prefill = main_api !== 'openai' && !power_user.instruct.enabled ? PLAIN_TEXT_ANSWER_CUE : '';
 
         if (isStreamingEnabled()) {
-            const messageId = await streamRawReply({ type: replyType, prompt, systemPrompt, responseLength, extra: { ooc: true } });
+            const messageId = await streamRawReply({ type: replyType, prompt, systemPrompt, prefill, responseLength, extra: { ooc: true } });
             return messageId === null ? undefined : await finalizeStreamedReply(messageId, replyType);
         }
 
-        const reply = await generateRaw({ prompt, systemPrompt, quietToLoud: false, responseLength, trimNames: true });
+        const reply = await generateRaw({ prompt, systemPrompt, prefill, quietToLoud: false, responseLength, trimNames: true });
         const { text, reasoning } = prepareReplyText(String(reply ?? ''));
         if (!text) {
             return;
