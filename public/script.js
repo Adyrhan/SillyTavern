@@ -274,6 +274,7 @@ import { accountStorage } from './scripts/util/AccountStorage.js';
 import { initWelcomeScreen, openPermanentAssistantChat, openPermanentAssistantCard, getPermanentAssistantAvatar } from './scripts/welcome-screen.js';
 import { initDataMaid } from './scripts/data-maid.js';
 import { getOocMode, initOocMode, isOocExcludedFromContext, OOC_MODE, runOocGeneration } from './scripts/ooc.js';
+import { initSimpleUi } from './scripts/simple-ui.js';
 import { clearItemizedPrompts, deleteItemizedPromptForMessage, deleteItemizedPrompts, findItemizedPromptSet, initItemizedPrompts, itemizedParams, itemizedPrompts, loadItemizedPrompts, promptItemize, replaceItemizedPromptText, saveItemizedPrompts, swapItemizedPrompts } from './scripts/itemized-prompts.js';
 import { getSystemMessageByType, initSystemMessages, SAFETY_CHAT, sendSystemMessage, system_message_types, system_messages } from './scripts/system-messages.js';
 import { event_types, eventSource } from './scripts/events.js';
@@ -778,6 +779,7 @@ async function firstLoadInit() {
     initReasoning();
     initOocMode();
     initWelcomeScreen();
+    initSimpleUi();
     await initScrapers();
     initCustomSelectedSamplers();
     initDataMaid();

@@ -873,6 +873,17 @@ async function renamePersona(avatarId) {
         return false;
     }
 
+    await setPersonaName(avatarId, newName);
+    return true;
+}
+
+/**
+ * Sets the name of a persona and refreshes the UI that shows it.
+ * @param {string} avatarId Persona avatar ID
+ * @param {string} newName New persona name
+ */
+export async function setPersonaName(avatarId, newName) {
+    const currentName = power_user.personas[avatarId];
     power_user.personas[avatarId] = newName;
     console.log(`Renamed persona ${avatarId} to ${newName}`);
 
@@ -885,7 +896,6 @@ async function renamePersona(avatarId) {
     await getUserAvatars(true, avatarId);
     updatePersonaUIStates();
     setPersonaDescription();
-    return true;
 }
 
 /**

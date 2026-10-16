@@ -426,6 +426,10 @@ function RA_autoconnect(PrevApi) {
 }
 
 function OpenNavPanels() {
+    // The simplified UI only opens drawers on demand, as an overlay.
+    if (document.body.classList.contains('simple-ui')) {
+        return;
+    }
     if (!isMobile()) {
         //auto-open R nav if locked and previously open
         if (accountStorage.getItem('NavLockOn') == 'true' && accountStorage.getItem('NavOpened') == 'true') {
