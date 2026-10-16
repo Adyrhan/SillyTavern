@@ -212,6 +212,12 @@ function connectProvider(p, { url, key, model }) {
     if (p.url && url !== undefined) {
         $(p.url).val(url.trim()).trigger('input');
     }
+    // Local chat templates (Qwen, Gemma, Mistral…) often reject system messages after the first one,
+    // which SillyTavern sends for character info and injections. Semi-strict keeps a single leading
+    // system message, so use it unless the user picked a mode in the advanced settings.
+    if (p.source === 'custom' && !$('#custom_prompt_post_processing').val()) {
+        $('#custom_prompt_post_processing').val('semi').trigger('change');
+    }
     if (key?.trim()) {
         $(p.key).val(key.trim());
     }

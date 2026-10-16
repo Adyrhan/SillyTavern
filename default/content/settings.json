@@ -627,6 +627,7 @@
         "openrouter_model": "OR_Website",
         "reverse_proxy": "",
         "chat_completion_source": "custom",
+        "custom_prompt_post_processing": "semi",
         "max_context_unlocked": false,
         "api_url_scale": "",
         "show_external_models": false,

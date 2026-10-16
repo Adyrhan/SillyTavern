@@ -415,7 +415,16 @@ body.simple-ui .mes .extraMesButtons {
 
 /* ---------- Classic drawers as a full-height overlay ---------- */
 
-body.simple-ui #top-settings-holder .drawer-content.openDrawer {
+/*
+ * The sheet geometry applies to closed drawers too, so a closing drawer stays in place instead of
+ * jumping back to its classic position. Drawers, Back bar and backdrop fade in and out together;
+ * allow-discrete keeps the drawer visible while it fades to display: none.
+ */
+body.simple-ui {
+    --su-overlay-fade: var(--animation-duration-2x);
+}
+
+body.simple-ui #top-settings-holder .drawer-content {
     position: fixed !important;
     inset: 0 !important;
     top: 0 !important;
@@ -432,13 +441,26 @@ body.simple-ui #top-settings-holder .drawer-content.openDrawer {
     padding-top: calc(var(--su-header-height) + 6px);
     z-index: 4000;
     resize: none !important;
+    opacity: 0;
+    transition-property: opacity, display;
+    transition-duration: var(--su-overlay-fade);
+    transition-timing-function: ease-in-out;
+    transition-behavior: allow-discrete;
+}
+
+body.simple-ui #top-settings-holder .drawer-content.openDrawer {
+    opacity: 1;
+
+    @starting-style {
+        opacity: 0;
+    }
 }
 
 #su-advanced-bar {
     display: none;
 }
 
-body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer) #su-advanced-bar {
+body.simple-ui #su-advanced-bar {
     display: flex;
     align-items: center;
     gap: 12px;
@@ -454,9 +476,13 @@ body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer) #su-advanced
     border-bottom: 1px solid var(--SmartThemeBorderColor);
     color: var(--SmartThemeBodyColor);
     z-index: 4001;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity var(--su-overlay-fade) ease-in-out, visibility var(--su-overlay-fade) allow-discrete;
 }
 
-body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer)::after {
+body.simple-ui::after {
     content: '';
     position: fixed;
     top: 0;
@@ -466,6 +492,22 @@ body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer)::after {
     height: 100dvh;
     background-color: var(--black50a);
     z-index: 3004;
+    opacity: 0;
+    visibility: hidden;
+    pointer-events: none;
+    transition: opacity var(--su-overlay-fade) ease-in-out, visibility var(--su-overlay-fade) allow-discrete;
+}
+
+body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer) #su-advanced-bar,
+body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer)::after {
+    opacity: 1;
+    visibility: visible;
+}
+
+/* The backdrop takes clicks while open, so clicking outside closes the drawer without also clicking what's below. */
+body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer) #su-advanced-bar,
+body.simple-ui:has(#top-settings-holder .drawer-content.openDrawer)::after {
+    pointer-events: auto;
 }
 
 #su-advanced-back {
